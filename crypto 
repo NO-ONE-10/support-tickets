@@ -1,0 +1,72 @@
+import streamlit as st
+from binance.client import Client
+import pandas as pd
+import numpy as np
+
+# Binance API Initialization
+api_key = "your_api_key"  # Replace with your Binance API Key
+api_secret = "your_api_secret"  # Replace with your Binance API Secret
+client = Client(api_key, api_secret)
+
+# Function to fetch Binance symbols dynamically
+@st.cache_data
+def get_binance_symbols():
+    exchange_info = client.get_exchange_info()
+    symbols = [s['symbol'] for s in exchange_info['symbols'] if s['status'] == 'TRADING']
+    return symbols
+
+# Function to fetch historical data
+@st.cache_data
+def fetch_historical_data(symbol, interval="1d", limit=300):
+    klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+    data = pd.DataFrame(klines, columns=[
+        "open_time", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base", "taker_buy_quote", "ignore"
+    ])
+    data["close"] = data["close"].astype(float)
+    data["date"] = pd.to_datetime(data["close_time"], unit='ms')
+    return data[["date", "close"]]
+
+# Calculate 10-month moving average
+def calculate_moving_average(data):
+    data["10_month_MA"] = data["close"].rolling(window=300).mean()  # 10 months = 300 days
+    return data
+
+# Streamlit App
+st.title("Crypto Screener: Price Above 10-Month Moving Average")
+symbols = get_binance_symbols()
+
+# Select symbols to analyze
+selected_symbols = st.multiselect("Select Binance Symbols", symbols, default=symbols[:5])
+
+screener_results = []
+for symbol in selected_symbols:
+    st.write(f"Fetching data for {symbol}...")
+    data = fetch_historical_data(symbol)
+    data = calculate_moving_average(data)
+    
+    # Check if the latest price is above the 10-month moving average
+    if data["close"].iloc[-1] > data["10_month_MA"].iloc[-1]:
+        screener_results.append({
+            "Symbol": symbol,
+            "Latest Price": data["close"].iloc[-1],
+            "10-Month MA": data["10_month_MA"].iloc[-1]
+        })
+
+# Display Results
+if screener_results:
+    st.success("Cryptocurrencies above their 10-month moving average:")
+    screener_df = pd.DataFrame(screener_results)
+    st.dataframe(screener_df)
+else:
+    st.warning("No symbols meet the criteria.")
+
+# Chart Example (Optional)
+st.header("Price and Moving Average Chart")
+if st.checkbox("Show Chart for First Symbol", value=True):
+    if screener_results:
+        chart_symbol = screener_results[0]["Symbol"]
+        chart_data = fetch_historical_data(chart_symbol)
+        chart_data = calculate_moving_average(chart_data)
+        st.line_chart(chart_data.set_index("date")[["close", "10_month_MA"]])
